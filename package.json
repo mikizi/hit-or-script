@@ -11,7 +11,8 @@
     "build": "vite build",
     "preview": "vite preview",
     "build:scripts": "tsc -p tsconfig.scripts.json",
-    "youtube:pull": "npm run build:scripts && node dist-node/scripts/fetchYoutubeTracks.js"
+    "youtube:pull": "npm run build:scripts && node dist-node/scripts/fetchYoutubeTracks.js",
+    "push:github": "git push -u origin main"
   },
   "keywords": [
     "eurovision",
