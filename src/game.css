@@ -309,7 +309,7 @@ body {
  */
 .play-stage {
   position: relative;
-  width: min(100%, 200px, calc(100dvh - 252px));
+  width: min(100%, 300px, calc(100dvh - 252px));
   max-width: 100%;
   aspect-ratio: 1;
   height: auto;
