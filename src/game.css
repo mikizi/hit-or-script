@@ -31,6 +31,13 @@
   font-variation-settings: "FILL" 1, "wght" 400, "GRAD" 0, "opsz" 48;
 }
 * { box-sizing: border-box; }
+/** Remove mobile Safari/Chrome blue tap flash on controls (keyboard users get :focus-visible rings below). */
+button,
+summary,
+[role="button"] {
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
 html {
   height: 100%;
   overflow-x: hidden;
@@ -158,7 +165,7 @@ body {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 50px;
+  gap: clamp(12px, 2.5dvh, 36px);
   overflow: hidden;
 }
 .game-header {
@@ -166,7 +173,7 @@ body {
   display: flex;
   flex-direction: column;
   align-items: stretch;
-  gap: clamp(18px, 4dvh, 28px);
+  gap: clamp(10px, 2.5dvh, 24px);
   flex-shrink: 0;
   padding-top: max(12px, env(safe-area-inset-top, 0px));
   margin-bottom: 4px;
@@ -209,6 +216,15 @@ body {
   -webkit-backdrop-filter: blur(10px);
   flex-shrink: 0;
   transition: transform 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+.header-scoreboard-btn:focus:not(:focus-visible) {
+  outline: none;
+}
+.header-scoreboard-btn:focus-visible {
+  outline: 2px solid rgba(34, 211, 238, 0.55);
+  outline-offset: 2px;
 }
 .header-scoreboard-btn:hover {
   border-color: rgba(244, 114, 182, 0.55);
@@ -230,7 +246,7 @@ body {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 12px;
+  gap: clamp(8px, 1.5dvh, 12px);
   width: 100%;
 }
 .game-header .hero-block h1 {
@@ -293,7 +309,7 @@ body {
  */
 .play-stage {
   position: relative;
-  width: min(100%, 248px, calc(100dvh - 330px));
+  width: min(100%, 200px, calc(100dvh - 252px));
   max-width: 100%;
   aspect-ratio: 1;
   height: auto;
@@ -304,7 +320,8 @@ body {
   justify-content: center;
   align-self: center;
   overflow: visible;
-  margin-bottom: 4px;
+  margin-top: 0;
+  margin-bottom: 0;
 }
 .play-stage__ring {
   position: absolute;
@@ -408,7 +425,7 @@ body {
   position: relative;
   z-index: 10;
   box-sizing: border-box;
-  width: min(108px, 46%);
+  width: min(88px, 40%);
   height: auto;
   aspect-ratio: 1;
   border: none;
@@ -423,9 +440,12 @@ body {
   color: #fff;
   -webkit-tap-highlight-color: transparent;
 }
-.btn-play:focus,
-.btn-play:focus-visible {
+.btn-play:focus:not(:focus-visible) {
   outline: none;
+}
+.btn-play:focus-visible {
+  outline: 2px solid rgba(34, 211, 238, 0.65);
+  outline-offset: 4px;
 }
 .btn-play::-moz-focus-inner {
   border: 0;
@@ -444,14 +464,14 @@ body {
   width: 0;
   height: 0;
   border-style: solid;
-  border-width: 13px 0 13px 22px;
+  border-width: 11px 0 11px 18px;
   border-color: transparent transparent transparent #ffffff;
-  margin-left: 6px;
+  margin-left: 5px;
   filter: drop-shadow(0 2px 8px rgba(0, 0, 0, 0.35));
 }
 .btn-play__dash {
   position: absolute;
-  inset: -9px;
+  inset: -7px;
   border-radius: 50%;
   border: 2px dashed rgba(34, 211, 238, 0.4);
   animation: spin 10s linear infinite;
@@ -466,7 +486,7 @@ body {
   justify-content: center;
   flex-shrink: 0;
   align-self: center;
-  padding: 4px 2px 8px;
+  padding: 2px 2px 5px;
   pointer-events: none;
   order: -1;
 }
@@ -475,13 +495,13 @@ body {
   display: flex;
   align-items: flex-end;
   justify-content: center;
-  gap: 4px;
-  height: 36px;
+  gap: 3px;
+  height: 28px;
   pointer-events: none;
   z-index: 2;
 }
 .eq span {
-  width: 7px;
+  width: 6px;
   border-radius: 999px;
   transform-origin: bottom;
   animation: eq-bounce 0.7s ease-in-out infinite;
@@ -515,7 +535,7 @@ body {
   width: 100%;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 8px;
   align-items: stretch;
   flex: 0 0 auto;
   max-width: 100%;
@@ -546,7 +566,7 @@ body {
 }
 .guess-stitch__title {
   font-family: var(--font-display);
-  font-size: 20px;
+  font-size: clamp(17px, 4.8vw, 20px);
   font-weight: 900;
   line-height: 1.15;
   color: #fff;
@@ -565,8 +585,8 @@ body {
 .guess-btn--ai .guess-stitch__icon { color: #22d3ee; }
 .guess-btn {
   width: 100%;
-  padding: 14px 16px;
-  border-radius: 18px;
+  padding: 10px 14px;
+  border-radius: 16px;
   cursor: pointer;
   font: inherit;
   position: relative;
@@ -576,6 +596,13 @@ body {
   backdrop-filter: blur(16px);
   transition: transform 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
   text-align: left;
+}
+.guess-btn:focus:not(:focus-visible) {
+  outline: none;
+}
+.guess-btn:focus-visible {
+  outline: 2px solid rgba(34, 211, 238, 0.55);
+  outline-offset: 2px;
 }
 .guess-btn::before {
   content: "";
@@ -1264,6 +1291,141 @@ body {
 .btn-next:active {
   transform: scale(0.98);
 }
+
+/** Narrow viewports — keep Hit + Script above the mobile browser chrome */
+@media (max-width: 959px) {
+  :root {
+    --header-bar-h: 32px;
+    --container-margin: 14px;
+  }
+
+  .main-flow {
+    gap: clamp(6px, 1.4dvh, 20px);
+    padding-bottom: max(8px, env(safe-area-inset-bottom, 0px));
+  }
+
+  .game-header {
+    gap: clamp(5px, 1.1dvh, 14px);
+    padding-top: max(6px, env(safe-area-inset-top, 0px));
+    margin-bottom: 0;
+  }
+
+  .hero-block {
+    gap: 5px;
+  }
+
+  .hero-title {
+    font-size: clamp(17px, 5.4vw, 24px);
+    line-height: 1.08;
+    letter-spacing: clamp(0.08em, 0.05em + 0.35vw, 0.18em);
+  }
+
+  .hero-sub {
+    font-size: clamp(10.5px, 2.9vw, 13px);
+    line-height: 1.3;
+    max-width: 100%;
+  }
+
+  .play-stage {
+    width: min(100%, 156px, calc(100dvh - 308px));
+  }
+
+  .play-stage__timer {
+    top: 3%;
+    padding: 0 5px 1px;
+    font-size: 8px;
+  }
+
+  .play-ring--dash-outer {
+    width: 100%;
+    height: 100%;
+  }
+
+  .play-ring--thin {
+    width: 92%;
+    height: 92%;
+  }
+
+  .play-ring--glow {
+    width: 72%;
+    height: 72%;
+    box-shadow: 0 0 14px rgba(189, 0, 255, 0.3);
+  }
+
+  .btn-play {
+    width: min(70px, 36%);
+    box-shadow:
+      0 0 16px rgba(189, 0, 255, 0.42),
+      inset 0 0 10px rgba(255, 255, 255, 0.05);
+  }
+
+  .btn-play__tri {
+    border-width: 9px 0 9px 15px;
+    margin-left: 4px;
+  }
+
+  .btn-play__dash {
+    inset: -5px;
+  }
+
+  .eq-bridge {
+    padding: 0 2px 2px;
+  }
+
+  .eq {
+    height: 20px;
+    gap: 2px;
+  }
+
+  .eq span {
+    width: 5px;
+  }
+
+  .choice-stack {
+    gap: 5px;
+  }
+
+  .guess-btn {
+    padding: 7px 11px;
+    border-radius: 13px;
+  }
+
+  .guess-stitch {
+    gap: 8px;
+  }
+
+  .guess-stitch__eyebrow {
+    font-size: 8px;
+    margin-bottom: 3px;
+    letter-spacing: 0.12em;
+  }
+
+  .guess-stitch__title {
+    font-size: clamp(14px, 4.2vw, 17px);
+  }
+
+  .guess-stitch__icon {
+    font-size: 24px !important;
+  }
+
+  .round-pill {
+    padding: 0 10px;
+  }
+
+  .header-scoreboard-btn {
+    padding: 0 10px;
+    font-size: 10px;
+  }
+
+  .score-chip__inner {
+    padding: 0 8px 0 6px;
+  }
+
+  .score-chip__num {
+    font-size: 15px;
+  }
+}
+
 @media (min-width: 960px) {
   .main-flow {
     width: 100%;
@@ -1363,6 +1525,10 @@ body {
   }
   .btn-play__tri {
     border-width: 22px 0 22px 36px;
+    margin-left: 8px;
+  }
+  .btn-play__dash {
+    inset: -9px;
   }
   .reveal-card {
     max-width: min(920px, 96vw);
