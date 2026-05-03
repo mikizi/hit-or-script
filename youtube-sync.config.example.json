@@ -1,0 +1,11 @@
+{
+  "maxPerChannel": 50,
+  "hit": {
+    "channelId": "UC…",
+    "handle": "OptionalHandleWithoutAt"
+  },
+  "script": {
+    "channelId": "UC…",
+    "handle": "OptionalHandleWithoutAt"
+  }
+}

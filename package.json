@@ -1,0 +1,33 @@
+{
+  "name": "hit-or-script",
+  "version": "1.0.0",
+  "type": "module",
+  "private": true,
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "build:scripts": "tsc -p tsconfig.scripts.json",
+    "youtube:pull": "npm run build:scripts && node dist-node/scripts/fetchYoutubeTracks.js"
+  },
+  "keywords": [
+    "eurovision",
+    "game",
+    "vite",
+    "typescript",
+    "github-pages"
+  ],
+  "author": "mikizi",
+  "license": "MIT",
+  "description": "Guess real Eurovision clips vs AI / fan showcases — Vite + TypeScript, GitHub Pages ready.",
+  "devDependencies": {
+    "@types/node": "^25.6.0",
+    "dotenv": "^17.4.2",
+    "typescript": "^6.0.3",
+    "vite": "^6.3.5",
+    "vite-plugin-pwa": "^1.2.0"
+  }
+}

@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="Hit or Script">
+  <defs>
+    <linearGradient id="ring" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#22d3ee" />
+      <stop offset="55%" stop-color="#a78bfa" />
+      <stop offset="100%" stop-color="#bd00ff" />
+    </linearGradient>
+    <filter id="glow" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="1.2" result="b" />
+      <feMerge>
+        <feMergeNode in="b" />
+        <feMergeNode in="SourceGraphic" />
+      </feMerge>
+    </filter>
+  </defs>
+  <rect width="32" height="32" rx="8" fill="#111225" />
+  <rect x="2.5" y="2.5" width="27" height="27" rx="6" fill="none" stroke="url(#ring)" stroke-width="2" filter="url(#glow)" />
+  <path d="M13 9.5 L22.5 16 L13 22.5 Z" fill="#f8fafc" />
+</svg>
