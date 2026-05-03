@@ -42,8 +42,8 @@ function toPayload(tracks: Track[]): TrackPayload[] {
   });
 }
 
-/** Test: set back to `10` for full run. */
-const ROUNDS_PER_GAME = 3;
+/** Test: set back to `10` for a long run. */
+const ROUNDS_PER_GAME = 5;
 /** Countdown length after Play; max round score still {@link MAX_ROUND_SCORE} (~2 points lost per second). */
 const SCORE_WINDOW_SEC = 50;
 const MAX_ROUND_SCORE = 100;

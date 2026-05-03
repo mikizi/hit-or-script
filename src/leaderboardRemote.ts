@@ -11,8 +11,8 @@ import { SCOREBOARD_MAX_ENTRIES } from "./scoreboard";
 
 const TABLE = "leaderboard_entries";
 
-/** Max total points for a single game (3 rounds × 100). */
-const MAX_GAME_SCORE = 300;
+/** Max total points for a single game (5 rounds × 100). Keep in sync with `ROUNDS_PER_GAME` in game.ts. */
+const MAX_GAME_SCORE = 500;
 
 function supabaseUrl(): string {
   return String(import.meta.env.VITE_SUPABASE_URL ?? "").trim().replace(/\/$/, "");
