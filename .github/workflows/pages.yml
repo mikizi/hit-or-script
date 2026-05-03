@@ -7,8 +7,11 @@ on:
     branches: [main, master]
   workflow_dispatch:
 
+# upload-pages-artifact needs pages:write + id-token on the build job (not only on deploy).
 permissions:
   contents: read
+  pages: write
+  id-token: write
 
 concurrency:
   group: pages-${{ github.workflow }}-${{ github.ref }}
