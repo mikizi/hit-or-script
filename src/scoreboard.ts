@@ -65,11 +65,19 @@ export function saveScoreboard(entries: ScoreboardEntry[]): void {
 
 const GHOST_ID = "__scoreboard-qualify-check__";
 
+function sortEntriesForRank(a: ScoreboardEntry, b: ScoreboardEntry): number {
+  if (b.score !== a.score) return b.score - a.score;
+  return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+}
+
 /**
- * Whether a finished run with `score` would still appear after save (top {@link SCOREBOARD_MAX_ENTRIES} by score).
+ * Whether `score` would rank inside the top {@link SCOREBOARD_MAX_ENTRIES} when merged with `entries`
+ * (same rule as the local scoreboard).
  */
-export function runQualifiesForScoreboard(score: number): boolean {
-  const entries = loadScoreboard();
+export function runQualifiesAgainstEntries(
+  score: number,
+  entries: readonly ScoreboardEntry[],
+): boolean {
   if (entries.length < SCOREBOARD_MAX_ENTRIES) return true;
   const ghost: ScoreboardEntry = {
     id: GHOST_ID,
@@ -78,12 +86,16 @@ export function runQualifiesForScoreboard(score: number): boolean {
     maxPossible: 0,
     createdAt: new Date().toISOString(),
   };
-  const next = [...entries, ghost].sort((a, b) => {
-    if (b.score !== a.score) return b.score - a.score;
-    return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
-  });
+  const next = [...entries, ghost].sort(sortEntriesForRank);
   const idx = next.findIndex((e) => e.id === GHOST_ID);
   return idx >= 0 && idx < SCOREBOARD_MAX_ENTRIES;
+}
+
+/**
+ * Whether a finished run with `score` would still appear after save (top {@link SCOREBOARD_MAX_ENTRIES} by score).
+ */
+export function runQualifiesForScoreboard(score: number): boolean {
+  return runQualifiesAgainstEntries(score, loadScoreboard());
 }
 
 export function addScoreboardEntry(
@@ -112,10 +124,7 @@ export function addScoreboardEntry(
     createdAt: new Date().toISOString(),
   };
   const next = [...loadScoreboard(), entry];
-  next.sort((a, b) => {
-    if (b.score !== a.score) return b.score - a.score;
-    return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
-  });
+  next.sort(sortEntriesForRank);
   saveScoreboard(next);
   return entry;
 }

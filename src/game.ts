@@ -5,11 +5,18 @@ import {
 } from "./tracks";
 import { resolveTrackFlagEmoji, SCOREBOARD_PICKER_FLAG_EMOJIS } from "./flags";
 import {
+  fetchGlobalLeaderboard,
+  insertGlobalLeaderboardEntry,
+  isGlobalLeaderboardConfigured,
+} from "./leaderboardRemote";
+import {
   addScoreboardEntry,
   ladderBadgeForPlace,
   loadScoreboard,
+  runQualifiesAgainstEntries,
   runQualifiesForScoreboard,
   SCOREBOARD_MAX_ENTRIES,
+  type ScoreboardEntry,
 } from "./scoreboard";
 import type { Track, TrackPayload } from "./types/track";
 import { extractYoutubeVideoId } from "./youtube";
@@ -123,6 +130,16 @@ export function bootGame(): void {
   const scoreboardOverlay = req<HTMLElement>("scoreboardOverlay");
   const scoreboardList = req<HTMLOListElement>("scoreboardList");
   const scoreboardEmpty = req<HTMLElement>("scoreboardEmpty");
+  const scoreboardLoading = req<HTMLElement>("scoreboardLoading");
+  const scoreboardTitle = req<HTMLElement>("scoreboardTitle");
+
+  const localScoreboardEmptyText =
+    scoreboardEmpty.textContent?.replace(/\s+/g, " ").trim() ?? "";
+
+  const SCOREBOARD_MSG_GLOBAL_EMPTY =
+    "No scores on the global board yet. Finish a game and add yours — it syncs for everyone.";
+  const SCOREBOARD_MSG_GLOBAL_ERR =
+    "Could not load the global leaderboard. Check your connection and try opening Scoreboard again.";
 
   roundTotal.textContent = String(roundTracks.length);
 
@@ -165,10 +182,8 @@ export function bootGame(): void {
     }
   }
 
-  function renderScoreboardList(): void {
-    const entries = loadScoreboard();
+  function renderScoreboardRows(entries: readonly ScoreboardEntry[]): void {
     scoreboardList.innerHTML = "";
-    scoreboardEmpty.classList.toggle("is-hidden", entries.length > 0);
     entries.forEach((e, i) => {
       const badge = ladderBadgeForPlace(i);
       const li = document.createElement("li");
@@ -200,11 +215,55 @@ export function bootGame(): void {
     });
   }
 
+  async function renderScoreboardList(): Promise<void> {
+    const global = isGlobalLeaderboardConfigured();
+    scoreboardTitle.textContent = global ? "World scoreboard" : "Scoreboard";
+    scoreboardList.setAttribute(
+      "aria-label",
+      global ? "Global leaderboard" : "Saved scores",
+    );
+
+    if (global) {
+      scoreboardLoading.hidden = false;
+      scoreboardEmpty.classList.add("is-hidden");
+    } else {
+      scoreboardLoading.hidden = true;
+    }
+
+    let entries: ScoreboardEntry[] = [];
+    let loadError = false;
+    try {
+      if (global) {
+        entries = await fetchGlobalLeaderboard();
+      } else {
+        entries = loadScoreboard();
+      }
+    } catch {
+      entries = [];
+      loadError = global;
+    } finally {
+      scoreboardLoading.hidden = true;
+    }
+
+    if (entries.length === 0) {
+      scoreboardEmpty.classList.remove("is-hidden");
+      scoreboardEmpty.textContent = loadError
+        ? SCOREBOARD_MSG_GLOBAL_ERR
+        : global
+          ? SCOREBOARD_MSG_GLOBAL_EMPTY
+          : localScoreboardEmptyText;
+      return;
+    }
+
+    scoreboardEmpty.classList.add("is-hidden");
+    renderScoreboardRows(entries);
+  }
+
   function openScoreboard(): void {
-    renderScoreboardList();
     scoreboardOverlay.classList.add("is-open");
     scoreboardOverlay.setAttribute("aria-hidden", "false");
     btnScoreboard.setAttribute("aria-expanded", "true");
+    void renderScoreboardList();
     btnScoreboardClose.focus();
   }
 
@@ -539,9 +598,8 @@ export function bootGame(): void {
     onGuess("script");
   });
 
-  function submitFinaleScoreboard(): void {
+  async function submitFinaleScoreboard(): Promise<void> {
     if (!showingFinale || finaleSavedToBoard) return;
-    if (!runQualifiesForScoreboard(lastFinaleScore)) return;
     clearFinaleSaveError();
     if (!finaleScoreboardName.checkValidity()) {
       finaleScoreboardName.reportValidity();
@@ -557,27 +615,56 @@ export function bootGame(): void {
       finaleFlagGrid.classList.add("finale-esc__flags-grid--invalid");
       return;
     }
+    const global = isGlobalLeaderboardConfigured();
+    btnAddScoreboard.disabled = true;
     finaleSavedToBoard = true;
     try {
-      addScoreboardEntry(raw, lastFinaleScore, lastFinaleMax, selectedFinaleFlag);
+      if (global) {
+        const board = await fetchGlobalLeaderboard();
+        if (!runQualifiesAgainstEntries(lastFinaleScore, board)) {
+          finaleSavedToBoard = false;
+          btnAddScoreboard.disabled = false;
+          showFinaleSaveError(
+            "The top " +
+              String(SCOREBOARD_MAX_ENTRIES) +
+              " scores changed — yours would not be saved now. Close and try another run.",
+          );
+          return;
+        }
+        await insertGlobalLeaderboardEntry({
+          label: raw,
+          score: lastFinaleScore,
+          maxPossible: lastFinaleMax,
+          flag: selectedFinaleFlag,
+        });
+      } else {
+        if (!runQualifiesForScoreboard(lastFinaleScore)) {
+          finaleSavedToBoard = false;
+          btnAddScoreboard.disabled = false;
+          return;
+        }
+        addScoreboardEntry(raw, lastFinaleScore, lastFinaleMax, selectedFinaleFlag);
+      }
     } catch (err) {
       finaleSavedToBoard = false;
+      btnAddScoreboard.disabled = false;
       showFinaleSaveError(err instanceof Error ? err.message : "Could not save.");
       return;
     }
+    btnAddScoreboard.disabled = false;
     hideReveal();
     showingFinale = false;
     openScoreboard();
   }
 
   btnAddScoreboard.addEventListener("click", () => {
-    submitFinaleScoreboard();
+    void submitFinaleScoreboard();
   });
 
   finaleScoreboardName.addEventListener("keydown", (ev) => {
     if (ev.key !== "Enter") return;
     ev.preventDefault();
-    submitFinaleScoreboard();
+    void submitFinaleScoreboard();
   });
 
   btnScoreboard.addEventListener("click", () => {
@@ -622,16 +709,7 @@ export function bootGame(): void {
       revealCard.className = "reveal-card reveal-card--correct";
       revealKindPill.style.display = "none";
       detailTitle.textContent = "Game over";
-      const canSave = runQualifiesForScoreboard(score);
-      finaleSaveBlock.hidden = !canSave;
-      revealCardActions.hidden = canSave;
-      detailMeta.textContent = canSave
-        ? String(roundTracks.length) +
-          " songs complete. Enter your name, pick a flag, then add your run — the scoreboard opens after save. Press Escape to leave without saving."
-        : String(roundTracks.length) +
-          " songs complete. Sorry — the scoreboard is full. We only keep the top " +
-          String(SCOREBOARD_MAX_ENTRIES) +
-          " scores, and yours would not be saved. Tap Close to continue, or open Scoreboard in the header to see saved runs.";
+      const globalBoard = isGlobalLeaderboardConfigured();
       detailFlag.textContent = "";
       detailFlag.style.display = "none";
       detailArtist.textContent = "";
@@ -646,19 +724,55 @@ export function bootGame(): void {
         " max</p>";
       finaleScoreboardName.value = "";
       finaleScoreboardName.disabled = false;
-      if (canSave) {
-        resetFinaleFlagPicker();
-        clearFinaleSaveError();
-      }
       detailStory.textContent = "";
       detailStory.style.display = "none";
       detailLink.innerHTML = "";
       btnAddScoreboard.disabled = false;
-      btnAddScoreboard.textContent = "Add to scoreboard";
+      btnAddScoreboard.textContent = globalBoard ? "Add to world scoreboard" : "Add to scoreboard";
       btnNextLabel.textContent = "Close";
       reveal.classList.add("open");
       reveal.setAttribute("aria-hidden", "false");
       revealCardBody.scrollTop = 0;
+
+      const n = roundTracks.length;
+      const applyFinaleSaveUi = (canSave: boolean): void => {
+        finaleSaveBlock.hidden = !canSave;
+        revealCardActions.hidden = canSave;
+        detailMeta.textContent = canSave
+          ? String(n) +
+            (globalBoard
+              ? " songs complete. Enter your name, pick a flag, then add your run to the world scoreboard. Press Escape to leave without saving."
+              : " songs complete. Enter your name, pick a flag, then add your run — the scoreboard opens after save. Press Escape to leave without saving.")
+          : String(n) +
+            " songs complete. Sorry — we only keep the top " +
+            String(SCOREBOARD_MAX_ENTRIES) +
+            (globalBoard
+              ? " scores on the world board, and yours would not be saved. Tap Close to continue, or open Scoreboard in the header."
+              : " scores, and yours would not be saved. Tap Close to continue, or open Scoreboard in the header to see saved runs.");
+        if (canSave) {
+          resetFinaleFlagPicker();
+          clearFinaleSaveError();
+        }
+      };
+
+      if (globalBoard) {
+        finaleSaveBlock.hidden = true;
+        revealCardActions.hidden = true;
+        detailMeta.textContent = "Checking world scoreboard…";
+        void (async () => {
+          let entries: ScoreboardEntry[] = [];
+          try {
+            entries = await fetchGlobalLeaderboard();
+          } catch {
+            entries = [];
+          }
+          if (!showingFinale || !reveal.classList.contains("open")) return;
+          applyFinaleSaveUi(runQualifiesAgainstEntries(score, entries));
+        })();
+      } else {
+        applyFinaleSaveUi(runQualifiesForScoreboard(score));
+      }
+
       return;
     }
     hideReveal();
@@ -671,5 +785,5 @@ export function bootGame(): void {
 
   resetRoundUi();
   renderRoundLabel();
-  renderScoreboardList();
+  void renderScoreboardList();
 }

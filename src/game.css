@@ -1653,6 +1653,16 @@ body {
   padding: 12px 16px 18px;
   -webkit-overflow-scrolling: touch;
 }
+.scoreboard-loading {
+  margin: 8px 0 12px;
+  font-size: 14px;
+  line-height: 1.5;
+  color: rgba(148, 163, 184, 0.95);
+}
+.scoreboard-loading[hidden],
+.scoreboard-loading.is-hidden {
+  display: none;
+}
 .scoreboard-empty {
   margin: 8px 0 12px;
   font-size: 14px;
