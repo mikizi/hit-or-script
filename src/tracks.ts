@@ -1,6 +1,8 @@
 import type { Track } from "./types/track.js";
+import { TRACKS_FROM_YOUTUBE } from "./generated/tracksFromYoutube.js";
+import { extractYoutubeVideoId } from "./youtube.js";
 
-/** Fixed 20s clips. `hit` uses a random start between 1:00–2:00 in the game. `script` (fan/AI) uses `SCRIPT_CLIP_START_MIN_SEC`–`SCRIPT_CLIP_START_MAX_SEC`; per-track `clipStartSec` is for typing / tooling only. */
+/** Fixed 20s clips. `hit` / `script` use random bands when length is known and >30s; ≤30s starts at 3s (clamped). Per-track `clipStartSec` is tooling / generator default. */
 export const CLIP_DURATION_SEC = 20;
 
 /** Inclusive seconds: fake-AI (`script`) quiz clips start at a random offset in this window. */
@@ -13,7 +15,35 @@ const PLAYLIST_STORY =
 const SCRIPT_NOTE =
   "AIROVISION / fan–AI Eurovision-style clip on YouTube — not an official Eurovision entry.";
 
-export const TRACKS: Track[] = [
+/**
+ * Copies `youtubeDurationSec` from `TRACKS_FROM_YOUTUBE` (seconds from YouTube ISO duration, not ms).
+ * Matches by `id` first, then by watch URL video id so hand-picked ids (e.g. `sarah-fire-fantasy`) still clamp to the same YouTube file as `yt-script-…`.
+ */
+function mergeYoutubeDurationsFromGenerated(base: Track[]): Track[] {
+  const byId = new Map<string, number>();
+  const byVideoId = new Map<string, number>();
+  for (const t of TRACKS_FROM_YOUTUBE) {
+    const d = t.youtubeDurationSec;
+    if (d == null || !Number.isFinite(d) || d <= 0) continue;
+    byId.set(t.id, d);
+    const vid = extractYoutubeVideoId(t.youtubeUrl);
+    if (!vid) continue;
+    const prev = byVideoId.get(vid);
+    if (prev === undefined || d > prev) {
+      byVideoId.set(vid, d);
+    }
+  }
+  return base.map((t) => {
+    const fromId = byId.get(t.id);
+    if (fromId !== undefined) return { ...t, youtubeDurationSec: fromId };
+    const vid = extractYoutubeVideoId(t.youtubeUrl);
+    const fromVid = vid ? byVideoId.get(vid) : undefined;
+    if (fromVid !== undefined) return { ...t, youtubeDurationSec: fromVid };
+    return t;
+  });
+}
+
+const TRACKS_BASE: Track[] = [
   {
     id: "neeli-floga",
     kind: "script",
@@ -29,8 +59,8 @@ export const TRACKS: Track[] = [
     kind: "script",
     youtubeUrl: "https://www.youtube.com/watch?v=gBx5lLrXg5I",
     clipStartSec: 0,
-    title: "Fire & Fantasy",
-    artist: "Sarah",
+    title: "Romania — Semi-Final 1 (first rehearsal)",
+    artist: "AIROVISION 02",
     revealNote:
       "AIROVISION 02 rehearsal-style fan content from Nicosia — not an official Eurovision entry.",
   },
@@ -400,28 +430,284 @@ export const TRACKS: Track[] = [
   },
 
   {
-    id: "au-delta-eclipse",
+    id: "yt-hit-xWCnWSoG8nI",
     kind: "hit",
-    youtubeUrl: "https://www.youtube.com/watch?v=EUMCr1pnaMY",
-    clipStartSec: 40,
-    title: "Eclipse",
-    artist: "Delta Goodrem",
-    country: "Australia",
-    year: 2026,
-    story:
-      "Delta Goodrem will represent Australia at the Eurovision Song Contest 2026 with the song “Eclipse”.",
+    youtubeUrl: "https://www.youtube.com/watch?v=xWCnWSoG8nI",
+    clipStartSec: 0,
+    title: "Noam Bettan - Michelle | Israel 🇮🇱 | Official Music Video | #Eurovision2026",
+    story: PLAYLIST_STORY,
   },
   {
-    id: "cy-antigoni-jalla",
+    id: "yt-hit-EUMCr1pnaMY",
+    kind: "hit",
+    youtubeUrl: "https://www.youtube.com/watch?v=EUMCr1pnaMY",
+    clipStartSec: 0,
+    title: "Delta Goodrem - Eclipse | Australia 🇦🇺 | Official Music Video | #Eurovision2026",
+    story: PLAYLIST_STORY,
+  },
+  {
+    id: "yt-hit-xKzEP9dwoss",
+    kind: "hit",
+    youtubeUrl: "https://www.youtube.com/watch?v=xKzEP9dwoss",
+    clipStartSec: 0,
+    title: "Søren Torpegaard Lund - Før Vi Går Hjem | Denmark 🇩🇰 | National Final Performance | #Eurovision2026",
+    story: PLAYLIST_STORY,
+  },
+  {
+    id: "yt-hit-NGwNTd_DA9s",
+    kind: "hit",
+    youtubeUrl: "https://www.youtube.com/watch?v=NGwNTd_DA9s",
+    clipStartSec: 0,
+    title: "Akylas - Ferto | Greece 🇬🇷 | Official Music Video | #Eurovision2026",
+    story: PLAYLIST_STORY,
+  },
+  {
+    id: "yt-hit-coh-lygCINY",
+    kind: "hit",
+    youtubeUrl: "https://www.youtube.com/watch?v=coh-lygCINY",
+    clipStartSec: 0,
+    title: "Bzikebi - On Replay | Georgia 🇬🇪 | Official Music Video | #Eurovision2026",
+    story: PLAYLIST_STORY,
+  },
+  {
+    id: "yt-hit-yn0YmI0dPb8",
+    kind: "hit",
+    youtubeUrl: "https://www.youtube.com/watch?v=yn0YmI0dPb8",
+    clipStartSec: 0,
+    title: "Alexandra Căpitănescu - Choke Me | Romania 🇷🇴 | Official Music Video | #Eurovision2026",
+    story: PLAYLIST_STORY,
+  },
+  {
+    id: "yt-hit-TzSs51BiQrE",
     kind: "hit",
     youtubeUrl: "https://www.youtube.com/watch?v=TzSs51BiQrE",
-    clipStartSec: 82,
-    title: "JALLA",
-    artist: "Antigoni",
-    country: "Cyprus",
-    year: 2026,
-    story:
-      "Antigoni will represent Cyprus at the Eurovision Song Contest 2026 with the song “JALLA”.",
+    clipStartSec: 0,
+    title: "Antigoni - JALLA | Cyprus 🇨🇾 | Official Music Video | #Eurovision2026",
+    story: PLAYLIST_STORY,
+  },
+  {
+    id: "yt-hit-ujoCYrvvTYQ",
+    kind: "hit",
+    youtubeUrl: "https://www.youtube.com/watch?v=ujoCYrvvTYQ",
+    clipStartSec: 0,
+    title: "Monroe - Regarde ! | France 🇫🇷 | Official Music Video #Eurovision2026",
+    story: PLAYLIST_STORY,
+  },
+  {
+    id: "yt-hit-9sfI4g6DWTU",
+    kind: "hit",
+    youtubeUrl: "https://www.youtube.com/watch?v=9sfI4g6DWTU",
+    clipStartSec: 0,
+    title: "ESSYLA - Dancing on the Ice | Belgium 🇧🇪 | Official Music Video | #Eurovision2026",
+    story: PLAYLIST_STORY,
+  },
+  {
+    id: "yt-hit-nuvy2d60HbI",
+    kind: "hit",
+    youtubeUrl: "https://www.youtube.com/watch?v=nuvy2d60HbI",
+    clipStartSec: 0,
+    title: "Tamara Živković - Nova Zora | Montenegro 🇲🇪 | Official Music Video | #Eurovision2026",
+    story: PLAYLIST_STORY,
+  },
+  {
+    id: "yt-hit-AzvRc3eH_rA",
+    kind: "hit",
+    youtubeUrl: "https://www.youtube.com/watch?v=AzvRc3eH_rA",
+    clipStartSec: 0,
+    title: "Sarah Engels - Fire | Germany 🇩🇪 | Official Music Video | #Eurovision2026",
+    story: PLAYLIST_STORY,
+  },
+  {
+    id: "yt-hit-6ea25aRGpLo",
+    kind: "hit",
+    youtubeUrl: "https://www.youtube.com/watch?v=6ea25aRGpLo",
+    clipStartSec: 0,
+    title: "Daniel Zizka - CROSSROADS | Czechia 🇨🇿 | Official Music Video | #Eurovision2026",
+    story: PLAYLIST_STORY,
+  },
+  {
+    id: "yt-hit-J3oGYo_mekw",
+    kind: "hit",
+    youtubeUrl: "https://www.youtube.com/watch?v=J3oGYo_mekw",
+    clipStartSec: 0,
+    title: "DARA - Bangaranga | Bulgaria 🇧🇬 | Official Music Video | #Eurovision2026",
+    story: PLAYLIST_STORY,
+  },
+  {
+    id: "yt-hit-9bfwNIYb96Q",
+    kind: "hit",
+    youtubeUrl: "https://www.youtube.com/watch?v=9bfwNIYb96Q",
+    clipStartSec: 0,
+    title: "Linda Lampenius x Pete Parkkonen - Liekinheitin  | Finland 🇫🇮 | Official Music Video | #Eurovision",
+    story: PLAYLIST_STORY,
+  },
+  {
+    id: "yt-hit-V406FAGkhyQ",
+    kind: "hit",
+    youtubeUrl: "https://www.youtube.com/watch?v=V406FAGkhyQ",
+    clipStartSec: 0,
+    title: "Sal Da Vinci - Per Sempre Sì | Italy 🇮🇹 | Official Music Video | #Eurovision2026",
+    story: PLAYLIST_STORY,
+  },
+  {
+    id: "yt-hit-hQt-ZCGVVW4",
+    kind: "hit",
+    youtubeUrl: "https://www.youtube.com/watch?v=hQt-ZCGVVW4",
+    clipStartSec: 0,
+    title: "FELICIA - My System (Official Performance Video)",
+    story: PLAYLIST_STORY,
+  },
+  {
+    id: "yt-hit-wOQe-fQSFxg",
+    kind: "hit",
+    youtubeUrl: "https://www.youtube.com/watch?v=wOQe-fQSFxg",
+    clipStartSec: 0,
+    title: "SENHIT - Superstar | San Marino 🇸🇲 | National Final Performance | #Eurovision2026",
+    story: PLAYLIST_STORY,
+  },
+  {
+    id: "yt-hit-PfpYGAzW5dM",
+    kind: "hit",
+    youtubeUrl: "https://www.youtube.com/watch?v=PfpYGAzW5dM",
+    clipStartSec: 0,
+    title: "Veronica Fusaro - Alice | Switzerland 🇨🇭 | Official Music Video | #Eurovision2026",
+    story: PLAYLIST_STORY,
+  },
+  {
+    id: "yt-hit-8Brb0M3UgEA",
+    kind: "hit",
+    youtubeUrl: "https://www.youtube.com/watch?v=8Brb0M3UgEA",
+    clipStartSec: 0,
+    title: "Vanilla Ninja - Too Epic To Be True (ESC Version) | Official Music Video",
+    story: PLAYLIST_STORY,
+  },
+  {
+    id: "yt-hit-CW6mQLBh6Js",
+    kind: "hit",
+    youtubeUrl: "https://www.youtube.com/watch?v=CW6mQLBh6Js",
+    clipStartSec: 0,
+    title: "AIDAN - Bella | Malta 🇲🇹 | Official Music Video | #Eurovision2026",
+    story: PLAYLIST_STORY,
+  },
+  {
+    id: "yt-hit-5EXoK-lgocw",
+    kind: "hit",
+    youtubeUrl: "https://www.youtube.com/watch?v=5EXoK-lgocw",
+    clipStartSec: 0,
+    title: "SIMÓN - Paloma Rumba | Armenia 🇦🇲 | Official Music Video | #Eurovision2026",
+    story: PLAYLIST_STORY,
+  },
+  {
+    id: "yt-hit-q78cnYIoF9Y",
+    kind: "hit",
+    youtubeUrl: "https://www.youtube.com/watch?v=q78cnYIoF9Y",
+    clipStartSec: 0,
+    title: "ALICJA - Pray | Poland 🇵🇱 | Official Music Video | #Eurovision2026",
+    story: PLAYLIST_STORY,
+  },
+  {
+    id: "yt-hit-b9AdRrA554o",
+    kind: "hit",
+    youtubeUrl: "https://www.youtube.com/watch?v=b9AdRrA554o",
+    clipStartSec: 0,
+    title: "Alis - Nân | Albania 🇦🇱 | Official Music Video | #Eurovision2026",
+    story: PLAYLIST_STORY,
+  },
+  {
+    id: "yt-hit-SoEXezpblAc",
+    kind: "hit",
+    youtubeUrl: "https://www.youtube.com/watch?v=SoEXezpblAc",
+    clipStartSec: 0,
+    title: "LELÉKA - Ridnym | Ukraine 🇺🇦 | Official Music Video | #Eurovision2026",
+    story: PLAYLIST_STORY,
+  },
+  {
+    id: "yt-hit-niMKvJ-Itq8",
+    kind: "hit",
+    youtubeUrl: "https://www.youtube.com/watch?v=niMKvJ-Itq8",
+    clipStartSec: 0,
+    title: "LOOK MUM NO COMPUTER - Eins, Zwei, Drei | United Kingdom 🇬🇧 | Official Music Video | #Eurovision2026",
+    story: PLAYLIST_STORY,
+  },
+  {
+    id: "yt-hit-DmVfJSRqgnI",
+    kind: "hit",
+    youtubeUrl: "https://www.youtube.com/watch?v=DmVfJSRqgnI",
+    clipStartSec: 0,
+    title: "Eva Marija - Mother Nature | Luxembourg 🇱🇺 | National Final Performance | #Eurovision2026",
+    story: PLAYLIST_STORY,
+  },
+  {
+    id: "yt-hit-yeYEYUHDgyc",
+    kind: "hit",
+    youtubeUrl: "https://www.youtube.com/watch?v=yeYEYUHDgyc",
+    clipStartSec: 0,
+    title: "Lion Ceccah - Sólo Quiero Más (Eurovision Version)",
+    story: PLAYLIST_STORY,
+  },
+  {
+    id: "yt-hit-vl7Jqnw10sU",
+    kind: "hit",
+    youtubeUrl: "https://www.youtube.com/watch?v=vl7Jqnw10sU",
+    clipStartSec: 0,
+    title: "LELEK - Andromeda | Croatia 🇭🇷 | Official Music Video | #Eurovision2026",
+    story: PLAYLIST_STORY,
+  },
+  {
+    id: "yt-hit-FJTLKBOOE98",
+    kind: "hit",
+    youtubeUrl: "https://www.youtube.com/watch?v=FJTLKBOOE98",
+    clipStartSec: 0,
+    title: "LAVINA - Kraj Mene | Serbia 🇷🇸 | Official Music Video | #Eurovision2026",
+    story: PLAYLIST_STORY,
+  },
+  {
+    id: "yt-hit-6C2ivaB5D00",
+    kind: "hit",
+    youtubeUrl: "https://www.youtube.com/watch?v=6C2ivaB5D00",
+    clipStartSec: 0,
+    title: "Atvara - Ēnā | Latvia 🇱🇻 | National Final Performance #Eurovision2026",
+    story: PLAYLIST_STORY,
+  },
+  {
+    id: "yt-hit-jyHaE6GqaaQ",
+    kind: "hit",
+    youtubeUrl: "https://www.youtube.com/watch?v=jyHaE6GqaaQ",
+    clipStartSec: 0,
+    title: "Bandidos do Cante - Rosa | Portugal 🇵🇹 | Official Music Video | #Eurovision2026",
+    story: PLAYLIST_STORY,
+  },
+  {
+    id: "yt-hit-zPGP9ZphxiY",
+    kind: "hit",
+    youtubeUrl: "https://www.youtube.com/watch?v=zPGP9ZphxiY",
+    clipStartSec: 0,
+    title: "COSMÓ - Tanzschein | Austria 🇦🇹 | Official Music Video | #Eurovision2026",
+    story: PLAYLIST_STORY,
+  },
+  {
+    id: "yt-hit-iMDBPe25JhM",
+    kind: "hit",
+    youtubeUrl: "https://www.youtube.com/watch?v=iMDBPe25JhM",
+    clipStartSec: 0,
+    title: "JIVA - Just Go | Azerbaijan 🇦🇿 | Official Music Video | #Eurovision2026",
+    story: PLAYLIST_STORY,
+  },
+  {
+    id: "yt-hit-MasllzWk_bQ",
+    kind: "hit",
+    youtubeUrl: "https://www.youtube.com/watch?v=MasllzWk_bQ",
+    clipStartSec: 0,
+    title: "JONAS LOVV - YA YA YA | Norway 🇳🇴 | Official Music Video | #Eurovision2026",
+    story: PLAYLIST_STORY,
+  },
+  {
+    id: "yt-hit-SViojHjNSzc",
+    kind: "hit",
+    youtubeUrl: "https://www.youtube.com/watch?v=SViojHjNSzc",
+    clipStartSec: 0,
+    title: "Satoshi - Viva, Moldova!  | Moldova 🇲🇩 | Official Music Video | #Eurovision2026",
+    story: PLAYLIST_STORY,
   },
   {
     id: "yt-hit-xR4BFQYFzMU",
@@ -616,3 +902,5 @@ export const TRACKS: Track[] = [
     story: PLAYLIST_STORY,
   },
 ];
+
+export const TRACKS: Track[] = mergeYoutubeDurationsFromGenerated(TRACKS_BASE);

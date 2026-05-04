@@ -10,9 +10,10 @@
  *    - channel: `channelId` ("UC…") and/or `handle` (no @) → channel uploads
  *    - `searchQuery` → YouTube search (dynamic)
  *    - `playlistId` ("PL…") → playlist order
- * 4. npm run youtube:pull — add `-- --write` for src/generated/tracksFromYoutube.ts
+ * 4. npm run youtube:pull — add `-- --write` for src/generated/tracksFromYoutube.ts (writes `youtubeDurationSec` + safe `clipStartSec`)
  *
  * Quota: channel ≈ channels + playlistItems; search uses search.list (higher cost per 100 results).
+ * After listing videos, `videos.list` (contentDetails) runs in batches of 50 ids (~1 quota unit per batch).
  */
 import "dotenv/config";
 import * as fs from "node:fs";
@@ -193,20 +194,86 @@ function stableId(kind: TrackKind, videoId: string): string {
   return `yt-${kind}-${videoId}`;
 }
 
+/** YouTube ISO-8601 duration, e.g. `PT4M13S`, `PT1H2M3S`. */
+function parseYoutubeIso8601Duration(iso: string): number {
+  if (!iso.startsWith("PT")) return 0;
+  let h = 0;
+  let m = 0;
+  let s = 0;
+  const hMatch = /(\d+)H/.exec(iso);
+  const mMatch = /(\d+)M/.exec(iso);
+  const sMatch = /(\d+)S/.exec(iso);
+  if (hMatch) h = Number.parseInt(hMatch[1]!, 10);
+  if (mMatch) m = Number.parseInt(mMatch[1]!, 10);
+  if (sMatch) s = Number.parseInt(sMatch[1]!, 10);
+  return h * 3600 + m * 60 + s;
+}
+
+const CLIP_QUIZ_SEC = 20;
+/** Keep in sync with `SHORT_TRACK_*` in game.ts. */
+const SHORT_TRACK_MAX_DURATION_SEC = 30;
+const SHORT_TRACK_CLIP_START_SEC = 3;
+/** Keep in sync with `HIT_CLIP_START_*` in game.ts. */
+const HIT_CLIP_LO = 60;
+const HIT_CLIP_HI = 120;
+/** Keep in sync with `SCRIPT_CLIP_START_*_SEC` in tracks.ts. */
+const SCRIPT_CLIP_LO = 10;
+const SCRIPT_CLIP_HI = 30;
+
+/** Default `clipStartSec` in generated file; in-game uses the same rules. */
+function suggestedClipStartSec(kind: TrackKind, durationSec: number | undefined): number {
+  if (durationSec == null || !Number.isFinite(durationSec) || durationSec <= 0) return 0;
+  const maxStart = Math.max(0, Math.floor(durationSec - CLIP_QUIZ_SEC));
+  if (maxStart <= 0) return 0;
+  if (durationSec <= SHORT_TRACK_MAX_DURATION_SEC) {
+    return Math.min(SHORT_TRACK_CLIP_START_SEC, maxStart);
+  }
+  const lo = kind === "hit" ? HIT_CLIP_LO : SCRIPT_CLIP_LO;
+  const hi = kind === "hit" ? HIT_CLIP_HI : SCRIPT_CLIP_HI;
+  const loC = Math.min(lo, maxStart);
+  const hiC = Math.min(hi, maxStart);
+  return Math.floor((loC + hiC) / 2);
+}
+
+async function fetchVideoDurationsById(key: string, videoIds: string[]): Promise<Map<string, number>> {
+  const unique = [...new Set(videoIds.filter((id) => id.length > 0))];
+  const map = new Map<string, number>();
+  const chunkSize = 50;
+  for (let i = 0; i < unique.length; i += chunkSize) {
+    const chunk = unique.slice(i, i + chunkSize);
+    const idParam = chunk.map((id) => encodeURIComponent(id)).join(",");
+    const data = await ytGet<{
+      items?: { id: string; contentDetails?: { duration?: string } }[];
+    }>(`/videos?part=contentDetails&id=${idParam}&maxResults=50`, key);
+    for (const it of data.items ?? []) {
+      const raw = it.contentDetails?.duration;
+      if (!raw) continue;
+      map.set(it.id, parseYoutubeIso8601Duration(raw));
+    }
+  }
+  return map;
+}
+
 function tsString(s: string): string {
   return JSON.stringify(s);
 }
 
-function videosToTracks(kind: TrackKind, videos: PlaylistVideo[]): Track[] {
-  return videos.map(
-    (v): Track => ({
+function videosToTracks(
+  kind: TrackKind,
+  videos: PlaylistVideo[],
+  durationByVideoId: Map<string, number>,
+): Track[] {
+  return videos.map((v): Track => {
+    const durationSec = durationByVideoId.get(v.videoId);
+    return {
       id: stableId(kind, v.videoId),
       kind,
       youtubeUrl: `https://www.youtube.com/watch?v=${v.videoId}`,
-      clipStartSec: 0,
+      clipStartSec: suggestedClipStartSec(kind, durationSec),
+      youtubeDurationSec: durationSec,
       title: v.title,
-    }),
-  );
+    };
+  });
 }
 
 function printTracksAsTs(tracks: Track[]): void {
@@ -218,6 +285,9 @@ function printTracksAsTs(tracks: Track[]): void {
       `    youtubeUrl: ${tsString(t.youtubeUrl)},`,
       `    clipStartSec: ${t.clipStartSec},`,
     ];
+    if (t.youtubeDurationSec != null) {
+      parts.push(`    youtubeDurationSec: ${t.youtubeDurationSec},`);
+    }
     if (t.title) parts.push(`    title: ${tsString(t.title)},`);
     if (t.artist) parts.push(`    artist: ${tsString(t.artist)},`);
     if (t.country) parts.push(`    country: ${tsString(t.country)},`);
@@ -228,7 +298,7 @@ function printTracksAsTs(tracks: Track[]): void {
     return parts.join("\n");
   });
 
-  console.log(`// ${tracks.length} track(s) from YouTube — set clipStartSec, artist, story/revealNote as needed.\n`);
+  console.log(`// ${tracks.length} track(s) from YouTube — set artist, story/revealNote as needed.\n`);
   console.log(lines.join("\n\n"));
 }
 
@@ -260,8 +330,11 @@ async function main(): Promise<void> {
   const hitVideos = await videosFromSource(key, cfg.hit, max);
   const scriptVideos = await videosFromSource(key, cfg.script, max);
 
-  const hitTracks = videosToTracks("hit", hitVideos);
-  const scriptTracks = videosToTracks("script", scriptVideos);
+  const allVideoIds = [...hitVideos, ...scriptVideos].map((v) => v.videoId);
+  const durationByVideoId = await fetchVideoDurationsById(key, allVideoIds);
+
+  const hitTracks = videosToTracks("hit", hitVideos, durationByVideoId);
+  const scriptTracks = videosToTracks("script", scriptVideos, durationByVideoId);
   const all = [...hitTracks, ...scriptTracks];
 
   const outPath = getWriteOutPath();
@@ -269,7 +342,7 @@ async function main(): Promise<void> {
     fs.mkdirSync(path.dirname(outPath), { recursive: true });
     const body = `import type { Track } from "../types/track.js";
 
-/** Auto-generated by npm run youtube:pull — edit clipStartSec, id, artist, story/revealNote, merge into TRACKS. */
+/** Auto-generated by npm run youtube:pull — edit id, artist, story/revealNote. youtubeDurationSec is whole seconds (YouTube ISO duration), not ms; merged into TRACKS by id / video id in tracks.ts. */
 export const TRACKS_FROM_YOUTUBE: Track[] = [
 ${all
   .map((t) => {
@@ -278,6 +351,9 @@ ${all
     parts.push(`    kind: ${tsString(t.kind)},`);
     parts.push(`    youtubeUrl: ${tsString(t.youtubeUrl)},`);
     parts.push(`    clipStartSec: ${t.clipStartSec},`);
+    if (t.youtubeDurationSec != null) {
+      parts.push(`    youtubeDurationSec: ${t.youtubeDurationSec},`);
+    }
     if (t.title) parts.push(`    title: ${tsString(t.title)},`);
     parts.push("  },");
     return parts.join("\n");

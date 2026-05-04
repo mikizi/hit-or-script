@@ -1,4 +1,5 @@
 import {
+  CLIP_DURATION_SEC,
   SCRIPT_CLIP_START_MAX_SEC,
   SCRIPT_CLIP_START_MIN_SEC,
   TRACKS as TRACK_LIBRARY,
@@ -20,6 +21,7 @@ import {
 } from "./scoreboard";
 import type { Track, TrackPayload } from "./types/track";
 import { extractYoutubeVideoId } from "./youtube";
+import { ensureYoutubeIframeApi } from "./youtubeIframeApi";
 
 function toPayload(tracks: Track[]): TrackPayload[] {
   return tracks.map((t) => {
@@ -32,6 +34,7 @@ function toPayload(tracks: Track[]): TrackPayload[] {
       videoId,
       clipStartSec: t.clipStartSec,
       youtubeUrl: t.youtubeUrl,
+      youtubeDurationSec: t.youtubeDurationSec,
       title: t.title,
       artist: t.artist,
       country: t.country,
@@ -56,6 +59,10 @@ function playStagePointsLabel(rawPoints: number): string {
 const HIT_CLIP_START_MIN = 60;
 const HIT_CLIP_START_MAX = 120;
 
+/** When total length is known and ≤ this, start at `SHORT_TRACK_CLIP_START_SEC` (clamped) instead of the 10–30s / 60–120s bands. */
+const SHORT_TRACK_MAX_DURATION_SEC = 30;
+const SHORT_TRACK_CLIP_START_SEC = 3;
+
 function shuffleInPlace(a: TrackPayload[]): void {
   for (let i = a.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
@@ -76,7 +83,14 @@ export function bootGame(): void {
   const ALL_TRACKS = toPayload(TRACK_LIBRARY);
   const pool = ALL_TRACKS.slice();
   shuffleInPlace(pool);
-  const roundTracks = pool.slice(0, Math.min(ROUNDS_PER_GAME, pool.length));
+  const nRounds = Math.min(ROUNDS_PER_GAME, pool.length);
+  const roundTracks = pool.slice(0, nRounds);
+  /** Extra shuffled tracks for Skip swaps (ads, etc.). */
+  const sparePool: TrackPayload[] = pool.slice(nRounds);
+
+  /** One Skip per page load (all rounds). */
+  let sessionSkipUsed = false;
+  let skipSwapInProgress = false;
 
   let roundClipStartSec = 0;
   let round = 0;
@@ -89,11 +103,23 @@ export function bootGame(): void {
   let lastFinaleScore = 0;
   let lastFinaleMax = 0;
   let finaleSavedToBoard = false;
-  const yt = req<HTMLIFrameElement>("yt");
+  const ytHost = req<HTMLElement>("yt");
+  let mainYtPlayer: YT.Player | null = null;
+  /** True after first PLAYING (or fallback) so scoring matches real playback start. */
+  let scoringYoutubeHasPlayed = false;
+  /** Wall-clock ms spent paused / buffering while scoring is active (not during preroll before first play). */
+  let scoringPauseAccumMs = 0;
+  /** When non-PLAYING began after scoring started; null while playing. */
+  let scoringPauseSinceMs: number | null = null;
+  let playbackFallbackTimer: number | null = null;
+
+  const PLAYBACK_FALLBACK_MS = 18000;
+
   const btnPlay = req<HTMLButtonElement>("btnPlay");
   const pulseMini = req<HTMLElement>("pulseMini");
   const btnHit = req<HTMLButtonElement>("btnHit");
   const btnScript = req<HTMLButtonElement>("btnScript");
+  const choiceStack = req<HTMLElement>("choiceStack");
   const roundNum = req<HTMLElement>("roundNum");
   const roundTotal = req<HTMLElement>("roundTotal");
   const scoreVal = req<HTMLElement>("scoreVal");
@@ -107,6 +133,7 @@ export function bootGame(): void {
   const playStage = req<HTMLElement>("playStage");
   const playStageTimer = req<HTMLElement>("playStageTimer");
   const playStageScoreArc = req<SVGCircleElement>("playStageScoreArc");
+  const btnSkipClip = req<HTMLButtonElement>("btnSkipClip");
   const detailFlag = req<HTMLElement>("detailFlag");
   const detailTitle = req<HTMLElement>("detailTitle");
   const detailMeta = req<HTMLElement>("detailMeta");
@@ -117,6 +144,7 @@ export function bootGame(): void {
   const btnNext = req<HTMLButtonElement>("btnNext");
   const btnNextLabel = req<HTMLSpanElement>("btnNextLabel");
   const revealCardActions = req<HTMLElement>("revealCardActions");
+  const revealCardMotion = req<HTMLElement>("revealCardMotion");
   const btnAddScoreboard = req<HTMLButtonElement>("btnAddScoreboard");
   const finaleEscBlock = req<HTMLElement>("finaleEscBlock");
   const finaleEscMain = req<HTMLElement>("finaleEscMain");
@@ -277,35 +305,63 @@ export function bootGame(): void {
     return roundTracks[round]!;
   }
 
-  function pickHitClipStartSec(): number {
-    const span = HIT_CLIP_START_MAX - HIT_CLIP_START_MIN + 1;
-    return HIT_CLIP_START_MIN + Math.floor(Math.random() * span);
+  function replacementBlockedVideoIds(): Set<string> {
+    const blocked = new Set<string>();
+    roundTracks.forEach((t, i) => {
+      if (i !== round) blocked.add(t.videoId);
+    });
+    blocked.add(roundTracks[round]!.videoId);
+    return blocked;
   }
 
-  function pickScriptClipStartSec(): number {
-    const span = SCRIPT_CLIP_START_MAX_SEC - SCRIPT_CLIP_START_MIN_SEC + 1;
-    return SCRIPT_CLIP_START_MIN_SEC + Math.floor(Math.random() * span);
+  /**
+   * @param consumeSpare - When true, remove chosen track from `sparePool` if it came from there.
+   */
+  function pickReplacementTrack(consumeSpare: boolean): TrackPayload | null {
+    const blocked = replacementBlockedVideoIds();
+    const allow = (t: TrackPayload): boolean => !blocked.has(t.videoId);
+    for (let s = 0; s < sparePool.length; s++) {
+      const t = sparePool[s]!;
+      if (!allow(t)) continue;
+      if (consumeSpare) sparePool.splice(s, 1);
+      return t;
+    }
+    const picks = ALL_TRACKS.filter(allow);
+    if (picks.length === 0) return null;
+    return picks[Math.floor(Math.random() * picks.length)]!;
+  }
+
+  function hasReplacementTrack(): boolean {
+    return pickReplacementTrack(false) !== null;
+  }
+
+  function takeReplacementTrack(): TrackPayload | null {
+    return pickReplacementTrack(true);
+  }
+
+  /**
+   * Random clip start in the usual band, clamped so `start + CLIP_DURATION_SEC` fits inside the video when duration is known.
+   * Very short clips (≤30s) start at 3s (or lower if the video cannot fit a full quiz window after that).
+   */
+  function pickClipStartSecForTrack(t: TrackPayload): number {
+    const lo = t.kind === "hit" ? HIT_CLIP_START_MIN : SCRIPT_CLIP_START_MIN_SEC;
+    const hi = t.kind === "hit" ? HIT_CLIP_START_MAX : SCRIPT_CLIP_START_MAX_SEC;
+    const dur = t.youtubeDurationSec;
+    if (dur == null || !Number.isFinite(dur) || dur <= 0) {
+      return lo + Math.floor(Math.random() * (hi - lo + 1));
+    }
+    const maxStart = Math.max(0, Math.floor(dur - CLIP_DURATION_SEC));
+    if (maxStart <= 0) return 0;
+    if (dur <= SHORT_TRACK_MAX_DURATION_SEC) {
+      return Math.min(SHORT_TRACK_CLIP_START_SEC, maxStart);
+    }
+    const loC = Math.min(lo, maxStart);
+    const hiC = Math.min(hi, maxStart);
+    return loC + Math.floor(Math.random() * (hiC - loC + 1));
   }
 
   function clipStartForCurrentRound(): number {
     return roundClipStartSec;
-  }
-
-  /** Main round: start at the quiz offset; no `end` so audio keeps going while you think (points decay over {@link SCORE_WINDOW_SEC}s). */
-  function embedUrl(t: TrackPayload): string {
-    const start = clipStartForCurrentRound();
-    return (
-      "https://www.youtube.com/embed/" +
-      t.videoId +
-      "?start=" +
-      start +
-      "&autoplay=1" +
-      "&mute=0" +
-      "&playsinline=1" +
-      "&controls=0" +
-      "&enablejsapi=1" +
-      "&rel=0&modestbranding=1"
-    );
   }
 
   /** Replay after a guess: same start as the round, no `end` so YouTube does not cut off at 20s. */
@@ -327,15 +383,110 @@ export function bootGame(): void {
 
   function pauseMainClip(): void {
     try {
-      const w = yt.contentWindow;
-      if (!w || !yt.src || yt.src.indexOf("youtube.com") === -1) return;
-      w.postMessage(
-        JSON.stringify({ event: "command", func: "pauseVideo", args: [] }),
-        "*",
-      );
+      mainYtPlayer?.pauseVideo();
     } catch {
       /* ignore */
     }
+  }
+
+  function clearPlaybackFallbackTimer(): void {
+    if (playbackFallbackTimer !== null) {
+      window.clearTimeout(playbackFallbackTimer);
+      playbackFallbackTimer = null;
+    }
+  }
+
+  function destroyMainPlayer(): void {
+    clearPlaybackFallbackTimer();
+    try {
+      mainYtPlayer?.destroy();
+    } catch {
+      /* ignore */
+    }
+    mainYtPlayer = null;
+  }
+
+  function mountYoutubePlayer(): void {
+    destroyMainPlayer();
+    const t = currentTrack();
+    const YT = window.YT!;
+    const PS = YT.PlayerState;
+    mainYtPlayer = new YT.Player(ytHost, {
+      videoId: t.videoId,
+      height: "315",
+      width: "560",
+      playerVars: {
+        autoplay: 1,
+        start: roundClipStartSec,
+        controls: 0,
+        playsinline: 1,
+        rel: 0,
+        modestbranding: 1,
+        enablejsapi: 1,
+        origin: window.location.origin,
+        iv_load_policy: 3,
+        fs: 0,
+        disablekb: 1,
+      },
+      events: {
+        onReady: (e: YT.PlayerEvent) => {
+          e.target.unMute();
+          e.target.setVolume(100);
+          e.target.playVideo();
+        },
+        onStateChange: (e: YT.PlayerEvent) => {
+          const st = e.data;
+          if (st === PS.PLAYING) {
+            if (!scoringYoutubeHasPlayed) {
+              beginScoringFromPlayback();
+            } else if (scoringPauseSinceMs !== null) {
+              scoringPauseAccumMs += Date.now() - scoringPauseSinceMs;
+              scoringPauseSinceMs = null;
+            }
+          } else if (
+            scoringYoutubeHasPlayed &&
+            (st === PS.PAUSED || st === PS.BUFFERING || st === PS.CUED)
+          ) {
+            if (scoringPauseSinceMs === null) {
+              scoringPauseSinceMs = Date.now();
+            }
+          }
+        },
+      },
+    });
+
+    playbackFallbackTimer = window.setTimeout(() => {
+      playbackFallbackTimer = null;
+      if (!audioStarted || answered || scoringYoutubeHasPlayed) return;
+      beginScoringFromPlayback();
+    }, PLAYBACK_FALLBACK_MS);
+  }
+
+  /** Start the points ring and guessing once playback is confirmed (or fallback timeout). */
+  function beginScoringFromPlayback(): void {
+    if (scoringYoutubeHasPlayed) return;
+    clearPlaybackFallbackTimer();
+    scoringYoutubeHasPlayed = true;
+    roundStartMs = Date.now();
+    scoringPauseAccumMs = 0;
+    scoringPauseSinceMs = null;
+    playStage.classList.remove("is-loading");
+    pulseMini.classList.remove("is-idle");
+    startScoreClock();
+    btnHit.disabled = false;
+    btnScript.disabled = false;
+    playStageTimer.textContent = playStagePointsLabel(MAX_ROUND_SCORE);
+    if (!sessionSkipUsed) {
+      btnSkipClip.disabled = !hasReplacementTrack();
+    }
+  }
+
+  /** Effective seconds into the scoring window (pauses during buffer / pause after play began). */
+  function scoreElapsedSec(): number {
+    if (!scoringYoutubeHasPlayed) return 0;
+    const now = Date.now();
+    const activePauseMs = scoringPauseSinceMs !== null ? now - scoringPauseSinceMs : 0;
+    return (now - roundStartMs - scoringPauseAccumMs - activePauseMs) / 1000;
   }
 
   function renderRevealOutcome(correct: boolean, roundPoints: number): void {
@@ -393,11 +544,11 @@ export function bootGame(): void {
   }
 
   function tickScoreClock(): void {
-    if (!audioStarted || answered) {
+    if (!audioStarted || answered || !scoringYoutubeHasPlayed) {
       stopScoreClock();
       return;
     }
-    const elapsedSec = (Date.now() - roundStartMs) / 1000;
+    const elapsedSec = scoreElapsedSec();
     const u = Math.min(Math.max(0, elapsedSec), SCORE_WINDOW_SEC);
     const frac = 1 - u / SCORE_WINDOW_SEC;
     playStageTimer.textContent = playStagePointsLabel(MAX_ROUND_SCORE * frac);
@@ -416,41 +567,107 @@ export function bootGame(): void {
     pointsDialRaf = requestAnimationFrame(tickScoreClock);
   }
 
-  function pokeYoutubeAudio(): void {
+  async function beginPlayback(): Promise<void> {
+    if (answered || showingFinale || audioStarted) return;
+    audioStarted = true;
+    scoringYoutubeHasPlayed = false;
+    scoringPauseAccumMs = 0;
+    scoringPauseSinceMs = null;
+    const t = currentTrack();
+    roundClipStartSec = pickClipStartSecForTrack(t);
+
+    choiceStack.classList.add("choice-stack--after-play");
+
+    btnPlay.disabled = true;
+    pulseMini.classList.add("is-idle");
+    btnHit.disabled = true;
+    btnScript.disabled = true;
+    playStage.classList.add("is-loading");
+    playStageTimer.textContent = "Starting…";
+    stopScoreClock();
+
     try {
-      const w = yt.contentWindow;
-      if (!w) return;
-      const cmd = (funcName: string, args: unknown[] = []) =>
-        JSON.stringify({ event: "command", func: funcName, args });
-      w.postMessage(cmd("unMute"), "*");
-      w.postMessage(cmd("setVolume", [100]), "*");
+      await ensureYoutubeIframeApi();
     } catch {
-      /* ignore */
+      audioStarted = false;
+      choiceStack.classList.remove("choice-stack--after-play");
+      btnPlay.disabled = false;
+      pulseMini.classList.add("is-idle");
+      playStage.classList.remove("is-loading");
+      playStageTimer.textContent = playStagePointsLabel(MAX_ROUND_SCORE);
+      return;
+    }
+
+    mountYoutubePlayer();
+    if (sessionSkipUsed) {
+      btnSkipClip.hidden = true;
+    } else {
+      btnSkipClip.hidden = false;
+      btnSkipClip.disabled = !hasReplacementTrack();
     }
   }
 
-  function beginPlayback(): void {
-    if (answered || showingFinale || audioStarted) return;
-    audioStarted = true;
-    roundStartMs = Date.now();
-    const t = currentTrack();
-    roundClipStartSec =
-      t.kind === "hit" ? pickHitClipStartSec() : pickScriptClipStartSec();
-    yt.onload = () => {
-      if (!yt.src || yt.src.indexOf("youtube.com") === -1) return;
-      [80, 400, 1000, 2200].forEach((ms) => {
-        setTimeout(pokeYoutubeAudio, ms);
-      });
-    };
-    yt.src = embedUrl(t);
-    btnPlay.disabled = true;
-    pulseMini.classList.remove("is-idle");
-    btnHit.disabled = false;
-    btnScript.disabled = false;
-    startScoreClock();
+  async function skipToNewClip(): Promise<void> {
+    if (sessionSkipUsed || skipSwapInProgress || !audioStarted || answered || showingFinale) return;
+    skipSwapInProgress = true;
+    btnSkipClip.disabled = true;
+    try {
+      const next = takeReplacementTrack();
+      if (!next) {
+        btnSkipClip.disabled = !hasReplacementTrack();
+        return;
+      }
+      roundTracks[round] = next;
+      roundClipStartSec = pickClipStartSecForTrack(next);
+      scoringYoutubeHasPlayed = false;
+      scoringPauseAccumMs = 0;
+      scoringPauseSinceMs = null;
+      stopScoreClock();
+      btnHit.disabled = true;
+      btnScript.disabled = true;
+      pulseMini.classList.add("is-idle");
+      playStage.classList.add("is-loading");
+      playStageTimer.textContent = "Loading…";
+      try {
+        await ensureYoutubeIframeApi();
+      } catch {
+        playStage.classList.remove("is-loading");
+        return;
+      }
+      mountYoutubePlayer();
+      sessionSkipUsed = true;
+      btnSkipClip.hidden = true;
+    } finally {
+      skipSwapInProgress = false;
+      if (!sessionSkipUsed && !btnSkipClip.hidden) {
+        btnSkipClip.disabled = !hasReplacementTrack();
+      }
+    }
   }
 
-  function hideReveal(): void {
+  function prefersRevealMotion(): boolean {
+    return !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  }
+
+  function waitMotionTransformEnd(el: HTMLElement, timeoutMs: number): Promise<void> {
+    return new Promise((resolve) => {
+      let done = false;
+      const finish = (): void => {
+        if (done) return;
+        done = true;
+        el.removeEventListener("transitionend", onEnd);
+        resolve();
+      };
+      const onEnd = (ev: TransitionEvent): void => {
+        if (ev.target !== el || ev.propertyName !== "transform") return;
+        finish();
+      };
+      el.addEventListener("transitionend", onEnd);
+      window.setTimeout(finish, timeoutMs);
+    });
+  }
+
+  function hideRevealNow(): void {
     reveal.classList.remove("open");
     reveal.setAttribute("aria-hidden", "true");
     revealCard.className = "reveal-card";
@@ -474,17 +691,70 @@ export function bootGame(): void {
     revealCardActions.hidden = false;
   }
 
+  async function hideRevealAsync(opts?: { animate?: boolean }): Promise<void> {
+    const useMotion =
+      opts?.animate === true && prefersRevealMotion() && reveal.classList.contains("open");
+    if (!useMotion) {
+      hideRevealNow();
+      return;
+    }
+    revealCard.classList.remove("reveal-card--flip-preset", "reveal-card--flip-show");
+    revealCard.classList.add("reveal-card--flip-hide");
+    await waitMotionTransformEnd(revealCardMotion, 720);
+    hideRevealNow();
+  }
+
+  /** Flip the card away, swap inner content, then flip back (e.g. round result → finale). */
+  async function flipRevealMidRound(update: () => void): Promise<void> {
+    if (!prefersRevealMotion() || !reveal.classList.contains("open")) {
+      update();
+      return;
+    }
+    revealCard.classList.remove("reveal-card--flip-preset", "reveal-card--flip-show");
+    revealCard.classList.add("reveal-card--flip-hide");
+    await waitMotionTransformEnd(revealCardMotion, 720);
+    update();
+    revealCard.classList.remove("reveal-card--flip-hide");
+    revealCard.classList.add("reveal-card--flip-preset");
+    void revealCardMotion.offsetHeight;
+    await new Promise<void>((resolve) => {
+      requestAnimationFrame(() => {
+        revealCard.classList.remove("reveal-card--flip-preset");
+        revealCard.classList.add("reveal-card--flip-show");
+        resolve();
+      });
+    });
+    await waitMotionTransformEnd(revealCardMotion, 720);
+  }
+
+  function runRevealFlipIn(): void {
+    if (!prefersRevealMotion()) return;
+    revealCard.classList.remove("reveal-card--flip-hide", "reveal-card--flip-show");
+    revealCard.classList.add("reveal-card--flip-preset");
+    void revealCardMotion.offsetHeight;
+    requestAnimationFrame(() => {
+      revealCard.classList.remove("reveal-card--flip-preset");
+      revealCard.classList.add("reveal-card--flip-show");
+    });
+  }
+
   function resetRoundUi(): void {
     audioStarted = false;
     answered = false;
-    yt.onload = null;
-    yt.src = "about:blank";
+    scoringYoutubeHasPlayed = false;
+    scoringPauseAccumMs = 0;
+    scoringPauseSinceMs = null;
+    destroyMainPlayer();
     btnPlay.disabled = false;
     pulseMini.classList.add("is-idle");
     btnHit.disabled = true;
     btnScript.disabled = true;
+    playStage.classList.remove("is-loading");
+    btnSkipClip.hidden = true;
+    btnSkipClip.disabled = false;
     stopScoreClock();
-    hideReveal();
+    hideRevealNow();
+    choiceStack.classList.remove("choice-stack--after-play");
   }
 
   function renderRoundLabel(): void {
@@ -563,21 +833,23 @@ export function bootGame(): void {
 
     const last = round >= roundTracks.length - 1;
     btnNextLabel.textContent = last ? "Final score" : "Next song";
+
+    runRevealFlipIn();
   }
 
   function pointsThisRound(correct: boolean): number {
     if (!correct) return 0;
-    const elapsedSec = (Date.now() - roundStartMs) / 1000;
-    const u = Math.min(Math.max(0, elapsedSec), SCORE_WINDOW_SEC);
-    return Math.round(MAX_ROUND_SCORE * (1 - u / SCORE_WINDOW_SEC));
+    const elapsedSec = Math.min(Math.max(0, scoreElapsedSec()), SCORE_WINDOW_SEC);
+    return Math.round(MAX_ROUND_SCORE * (1 - elapsedSec / SCORE_WINDOW_SEC));
   }
 
   function onGuess(guess: "hit" | "script"): void {
-    if (!audioStarted || answered) return;
+    if (!audioStarted || !scoringYoutubeHasPlayed || answered) return;
     answered = true;
     stopScoreClock();
     btnHit.disabled = true;
     btnScript.disabled = true;
+    btnSkipClip.hidden = true;
     pulseMini.classList.add("is-idle");
     const t = currentTrack();
     const correct = guess === t.kind;
@@ -587,14 +859,20 @@ export function bootGame(): void {
     openReveal(guess, correct, roundPts);
   }
 
-  btnPlay.addEventListener("click", beginPlayback);
+  btnPlay.addEventListener("click", () => {
+    void beginPlayback();
+  });
+
+  btnSkipClip.addEventListener("click", () => {
+    void skipToNewClip();
+  });
 
   btnHit.addEventListener("click", () => {
-    if (!audioStarted || answered || showingFinale) return;
+    if (!audioStarted || !scoringYoutubeHasPlayed || answered || showingFinale) return;
     onGuess("hit");
   });
   btnScript.addEventListener("click", () => {
-    if (!audioStarted || answered || showingFinale) return;
+    if (!audioStarted || !scoringYoutubeHasPlayed || answered || showingFinale) return;
     onGuess("script");
   });
 
@@ -652,7 +930,7 @@ export function bootGame(): void {
       return;
     }
     btnAddScoreboard.disabled = false;
-    hideReveal();
+    await hideRevealAsync({ animate: true });
     showingFinale = false;
     openScoreboard();
   }
@@ -686,54 +964,21 @@ export function bootGame(): void {
     }
     if (showingFinale && reveal.classList.contains("open")) {
       ev.preventDefault();
-      hideReveal();
-      showingFinale = false;
+      void hideRevealAsync({ animate: true }).then(() => {
+        showingFinale = false;
+      });
     }
   });
 
-  btnNext.addEventListener("click", () => {
+  async function onBtnNextClick(): Promise<void> {
     if (showingFinale) {
-      hideReveal();
+      await hideRevealAsync({ animate: true });
       showingFinale = false;
       return;
     }
     if (round >= roundTracks.length - 1) {
-      showingFinale = true;
-      const maxPossible = roundTracks.length * MAX_ROUND_SCORE;
-      lastFinaleScore = score;
-      lastFinaleMax = maxPossible;
-      finaleSavedToBoard = false;
-      revealVideoShell.style.display = "none";
-      revealOutcome.innerHTML = "";
-      revealYt.src = "about:blank";
-      revealCard.className = "reveal-card reveal-card--correct";
-      revealKindPill.style.display = "none";
-      detailTitle.textContent = "Game over";
       const globalBoard = isGlobalLeaderboardConfigured();
-      detailFlag.textContent = "";
-      detailFlag.style.display = "none";
-      detailArtist.textContent = "";
-      finaleEscBlock.hidden = false;
-      finaleEscMain.innerHTML =
-        '<p class="finale-esc__eyebrow">Total points</p>' +
-        '<p class="finale-esc__score">' +
-        String(score) +
-        "</p>" +
-        '<p class="finale-esc__max">out of ' +
-        String(maxPossible) +
-        " max</p>";
-      finaleScoreboardName.value = "";
-      finaleScoreboardName.disabled = false;
-      detailStory.textContent = "";
-      detailStory.style.display = "none";
-      detailLink.innerHTML = "";
-      btnAddScoreboard.disabled = false;
-      btnAddScoreboard.textContent = globalBoard ? "Add to world scoreboard" : "Add to scoreboard";
-      btnNextLabel.textContent = "Close";
-      reveal.classList.add("open");
-      reveal.setAttribute("aria-hidden", "false");
-      revealCardBody.scrollTop = 0;
-
+      const maxPossible = roundTracks.length * MAX_ROUND_SCORE;
       const n = roundTracks.length;
       const applyFinaleSaveUi = (canSave: boolean): void => {
         finaleSaveBlock.hidden = !canSave;
@@ -755,6 +1000,42 @@ export function bootGame(): void {
         }
       };
 
+      await flipRevealMidRound(() => {
+        showingFinale = true;
+        lastFinaleScore = score;
+        lastFinaleMax = maxPossible;
+        finaleSavedToBoard = false;
+        revealVideoShell.style.display = "none";
+        revealOutcome.innerHTML = "";
+        revealYt.src = "about:blank";
+        revealCard.className = "reveal-card reveal-card--correct";
+        revealKindPill.style.display = "none";
+        detailTitle.textContent = "Game over";
+        detailFlag.textContent = "";
+        detailFlag.style.display = "none";
+        detailArtist.textContent = "";
+        finaleEscBlock.hidden = false;
+        finaleEscMain.innerHTML =
+          '<p class="finale-esc__eyebrow">Total points</p>' +
+          '<p class="finale-esc__score">' +
+          String(score) +
+          "</p>" +
+          '<p class="finale-esc__max">out of ' +
+          String(maxPossible) +
+          " max</p>";
+        finaleScoreboardName.value = "";
+        finaleScoreboardName.disabled = false;
+        detailStory.textContent = "";
+        detailStory.style.display = "none";
+        detailLink.innerHTML = "";
+        btnAddScoreboard.disabled = false;
+        btnAddScoreboard.textContent = globalBoard ? "Add to world scoreboard" : "Add to scoreboard";
+        btnNextLabel.textContent = "Close";
+        reveal.classList.add("open");
+        reveal.setAttribute("aria-hidden", "false");
+        revealCardBody.scrollTop = 0;
+      });
+
       if (globalBoard) {
         finaleSaveBlock.hidden = true;
         revealCardActions.hidden = true;
@@ -775,10 +1056,14 @@ export function bootGame(): void {
 
       return;
     }
-    hideReveal();
+    await hideRevealAsync({ animate: true });
     round += 1;
     resetRoundUi();
     renderRoundLabel();
+  }
+
+  btnNext.addEventListener("click", () => {
+    void onBtnNextClick();
   });
 
   buildFinaleFlagPicker();
